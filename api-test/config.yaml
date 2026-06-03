@@ -1,0 +1,29 @@
+settings:
+  # How long to run the monitor (24 hours = one day)
+  duration_hours: 24
+
+  # Seconds to wait between each full round of API checks
+  interval_seconds: 60
+
+  # Per-request timeout in seconds
+  timeout_seconds: 10
+
+  # CSV output file (written in the api-test folder unless an absolute path is given)
+  output_file: results.csv
+
+apis:
+  - name: httpbin_get
+    url: https://httpbin.org/get
+    method: GET
+
+  - name: httpbin_status_200
+    url: https://httpbin.org/status/200
+    method: GET
+
+  - name: httpbin_delay_2s
+    url: https://httpbin.org/delay/2
+    method: GET
+
+  - name: httpbin_delay_15s
+    url: https://httpbin.org/delay/15
+    method: GET

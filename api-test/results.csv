@@ -1,0 +1,6 @@
+timestamp_utc,api_name,url,method,http_status,response_time_ms,result,error_message
+2026-05-29T14:13:15.002384+00:00,httpbin_get,https://httpbin.org/get,GET,503,1909.01,success,
+2026-05-29T14:13:16.911928+00:00,httpbin_status_200,https://httpbin.org/status/200,GET,503,246.50,success,
+2026-05-29T14:13:17.159107+00:00,httpbin_delay_2s,https://httpbin.org/delay/2,GET,503,245.97,success,
+2026-05-29T14:13:17.405568+00:00,httpbin_delay_15s,https://httpbin.org/delay/15,GET,503,245.39,success,
+2026-05-29T14:14:17.655689+00:00,httpbin_get,https://httpbin.org/get,GET,200,4960.00,success,
