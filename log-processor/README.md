@@ -34,26 +34,27 @@ This writes `log_analysis.xlsx` using the sample logs under `sample_logs/`.
 
 1. Reads each log file line by line.
 2. Matches lines containing your **line pattern** (configured in YAML or via `--pattern`).
-3. Extracts the numeric value where `X` appears in the pattern (for example, milliseconds).
-4. Converts the value to **seconds** using `value_divisor` (default `1000` for milliseconds).
-5. Parses the **time** on each line (no date in the log).
-6. Assigns a **calendar date** starting from the start date; when the time moves backward (e.g. `23:59` then `00:02`), the date advances by one day.
-7. Writes one Excel sheet per log file (sheet name = file name without extension).
-8. Adds a **line chart** below the data on each sheet (seconds vs. date/time).
+3. Extracts the numeric value where `x` appears in the pattern (for example, millis).
+4. Converts the value to **seconds** using `value_divisor` (default `1000` for millis).
+5. Optionally keeps only lines where duration is **greater than** `min_seconds`.
+6. Parses the **time** on each line (no date in the log).
+7. Assigns a **calendar date** starting from the start date; when the time moves backward (e.g. `23:59` then `00:02`), the date advances by one day.
+8. Writes one Excel sheet per log file (sheet name = file name without extension).
+9. Adds a **line chart** below the data on each sheet (seconds vs. combined date/time).
 
 ### Example log line
 
 ```
-23:58:10 INFO Web cache retrieval took 120 ms
+23:58:10 INFO DB retrieval took 120 millis
 ```
 
-With pattern `Web cache retrieval took X ms` and start date `2026-06-01`, the first rows might be:
+With pattern `DB retrieval took x millis` and start date `2026-06-01`, the first rows might be:
 
-| Date       | Time     | Seconds |
-|------------|----------|---------|
-| 2026-06-01 | 23:58:10 | 0.12    |
-| 2026-06-01 | 23:59:45 | 0.095   |
-| 2026-06-02 | 00:02:30 | 0.21    |
+| DateTime            | Seconds |
+|---------------------|---------|
+| 2026-06-01 23:58:10 | 0.12    |
+| 2026-06-01 23:59:45 | 0.095   |
+| 2026-06-02 00:02:30 | 2.1     |
 
 ## Configuration (`config.yaml`)
 
@@ -62,9 +63,11 @@ settings:
   start_date: 2026-06-01      # optional if you pass --start-date
   output_file: log_analysis.xlsx
 
-line_pattern: "Web cache retrieval took X ms"
+line_pattern: "DB retrieval took x millis"
 
-value_divisor: 1000           # 1000 = ms → seconds, 1 = already seconds
+value_divisor: 1000           # 1000 = millis → seconds, 1 = already seconds
+
+min_seconds: 0                # only include lines with duration > this (seconds)
 
 log_files:                    # optional if you pass -f or positional paths
   - sample_logs/server-a.log
@@ -75,26 +78,39 @@ Paths in `log_files` and `output_file` are resolved relative to the config file�
 
 ### Line pattern
 
-Use `X` where the number appears in the log:
+Use `x` (or `X`) where the number appears in the log:
 
-| Log text                         | `line_pattern`                    |
-|----------------------------------|-----------------------------------|
-| `Web cache retrieval took 150 ms`| `Web cache retrieval took X ms`   |
-| `Cache lookup duration: 42ms`    | `Cache lookup duration: Xms`      |
-| `Query completed in 3.5 sec`     | `Query completed in X sec` + `value_divisor: 1` |
+| Log text                         | `line_pattern`                      |
+|----------------------------------|-------------------------------------|
+| `DB retrieval took 150 millis`   | `DB retrieval took x millis`        |
+| `Cache lookup duration: 42ms`    | `Cache lookup duration: xms`        |
+| `Query completed in 3.5 sec`     | `Query completed in x sec` + `value_divisor: 1` |
+
+### Minimum duration filter
+
+Set `min_seconds` in config or pass `--min-seconds` to export only lines **greater than** that threshold (after converting to seconds):
+
+```yaml
+min_seconds: 1.0    # keep only DB calls taking more than 1 second
+```
+
+```powershell
+py process_logs.py --min-seconds 1
+```
 
 ## Command-line usage
 
 ```text
-py process_logs.py [-c CONFIG] [-d YYYY-MM-DD] [--pattern PATTERN] [-o OUTPUT]
-                   [-f PATH ...] [log_files ...]
+py process_logs.py [-c CONFIG] [-d YYYY-MM-DD] [--pattern PATTERN]
+                   [--min-seconds SECONDS] [-o OUTPUT] [-f PATH ...] [log_files ...]
 ```
 
 | Option | Description |
 |--------|-------------|
 | `-c`, `--config` | YAML config file (default: `config.yaml` in the current directory if it exists) |
 | `-d`, `--start-date` | First calendar date (`YYYY-MM-DD`). Overrides `settings.start_date` in config |
-| `--pattern` | Line pattern with `X` as the numeric placeholder. Overrides `line_pattern` in config |
+| `--pattern` | Line pattern with `x` as the numeric placeholder. Overrides `line_pattern` in config |
+| `--min-seconds` | Only include lines with duration **greater than** this many seconds. Overrides `min_seconds` in config |
 | `-o`, `--output` | Output Excel path. Overrides `settings.output_file` in config |
 | `-f`, `--log-file` | Log file path (repeat up to 4 times). Overrides `log_files` in config |
 | positional `log_files` | Log paths at the end of the command (alternative to `-f`) |
@@ -119,6 +135,12 @@ py process_logs.py
 py process_logs.py -d 2026-06-15 -f sample_logs\server-a.log -f sample_logs\server-b.log
 ```
 
+**Only slow DB calls (> 1 second):**
+
+```powershell
+py process_logs.py --min-seconds 1
+```
+
 **Override output file:**
 
 ```powershell
@@ -136,7 +158,7 @@ py process_logs.py -d 2026-06-01 sample_logs\server-a.log sample_logs\server-b.l
 ```powershell
 py process_logs.py `
   -d 2026-06-01 `
-  --pattern "Web cache retrieval took X ms" `
+  --pattern "DB retrieval took x millis" `
   -f C:\logs\server-a.log `
   -f C:\logs\server-b.log `
   -o report.xlsx
@@ -152,7 +174,7 @@ py process_logs.py -c C:\configs\prod.yaml -d 2026-06-01
 
 - Single `.xlsx` file (default: `log_analysis.xlsx`).
 - One worksheet per input log file.
-- Columns: **Date**, **Time**, **Seconds** (plus a hidden **DateTime** column used for the chart axis).
+- Columns: **DateTime** (combined date and time), **Seconds**.
 - Line chart under the table on each sheet when there is at least one matching line.
 
 Open the file in Microsoft Excel to view charts; some viewers only show the table.

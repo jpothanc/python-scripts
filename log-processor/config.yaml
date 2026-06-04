@@ -5,12 +5,15 @@ settings:
   # Output Excel workbook (relative paths are resolved from this config file's folder)
   output_file: log_analysis.xlsx
 
-# Log line pattern to match. Use X where the numeric duration appears in the log.
-# Example log line: "Web cache retrieval took 150 ms"
-line_pattern: "Web cache retrieval took X ms"
+# Log line pattern to match. Use x or X where the numeric duration appears in the log.
+# Example log line: "DB retrieval took 150 millis"
+line_pattern: "DB retrieval took x millis"
 
-# Divide the captured number by this to produce seconds (1000 = milliseconds, 1 = already seconds)
+# Divide the captured number by this to produce seconds (1000 = millis, 1 = already seconds)
 value_divisor: 1000
+
+# Only include lines where duration is greater than this many seconds (0 = include all)
+min_seconds: 0
 
 # Optional if you pass -f/--log-file or positional paths on the command line
 log_files:

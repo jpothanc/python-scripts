@@ -1,5 +1,5 @@
-14:00:01 INFO Web cache retrieval took 300 ms
-18:22:10 INFO Web cache retrieval took 175 ms
-23:50:00 INFO Web cache retrieval took 90 ms
-00:05:12 INFO Web cache retrieval took 400 ms
-06:00:00 INFO Web cache retrieval took 110 ms
+14:00:01 INFO DB retrieval took 300 millis
+18:22:10 INFO DB retrieval took 175 millis
+23:50:00 INFO DB retrieval took 90 millis
+00:05:12 INFO DB retrieval took 4000 millis
+06:00:00 INFO DB retrieval took 110 millis

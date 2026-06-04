@@ -27,10 +27,12 @@ TIME_PATTERN = re.compile(
 )
 
 
+PLACEHOLDER_SPLIT = re.compile(r"(?i)x")
+
+
 @dataclass(frozen=True)
 class LogEntry:
-    entry_date: date
-    entry_time: time
+    entry_datetime: datetime
     seconds: float
 
 
@@ -39,17 +41,18 @@ class ProcessorConfig:
     start_date: date | None
     line_pattern: str
     value_divisor: float
+    min_seconds: float
     output_file: Path
     log_files: list[Path]
 
 
 def pattern_to_regex(pattern: str) -> re.Pattern[str]:
-    if "X" not in pattern:
-        raise ValueError("line_pattern must contain 'X' as the numeric placeholder.")
+    if not PLACEHOLDER_SPLIT.search(pattern):
+        raise ValueError("line_pattern must contain 'x' as the numeric placeholder.")
 
-    parts = pattern.split("X")
+    parts = PLACEHOLDER_SPLIT.split(pattern)
     regex_body = r"(\d+(?:\.\d+)?)".join(re.escape(part) for part in parts)
-    return re.compile(regex_body)
+    return re.compile(regex_body, re.IGNORECASE)
 
 
 def parse_time_from_line(line: str) -> time | None:
@@ -83,7 +86,10 @@ def assign_dates(entries: list[tuple[time, float]], start_date: date) -> list[Lo
             current_date += timedelta(days=1)
 
         results.append(
-            LogEntry(entry_date=current_date, entry_time=entry_time, seconds=seconds)
+            LogEntry(
+                entry_datetime=datetime.combine(current_date, entry_time),
+                seconds=seconds,
+            )
         )
         previous_time = entry_time
 
@@ -95,6 +101,7 @@ def process_log_file(
     line_pattern: re.Pattern[str],
     start_date: date,
     value_divisor: float,
+    min_seconds: float,
 ) -> list[LogEntry]:
     raw_entries: list[tuple[time, float]] = []
 
@@ -111,7 +118,10 @@ def process_log_file(
             raw_value = float(pattern_match.group(1))
             raw_entries.append((entry_time, raw_value / value_divisor))
 
-    return assign_dates(raw_entries, start_date)
+    entries = assign_dates(raw_entries, start_date)
+    if min_seconds <= 0:
+        return entries
+    return [entry for entry in entries if entry.seconds > min_seconds]
 
 
 def sanitize_sheet_name(file_path: Path, used_names: set[str]) -> str:
@@ -136,23 +146,16 @@ def write_sheet(
     chart_title: str,
 ) -> Worksheet:
     sheet = workbook.create_sheet(title=sheet_name)
-    sheet.append(["Date", "Time", "Seconds", "DateTime"])
+    sheet.append(["DateTime", "Seconds"])
 
     for entry in entries:
-        dt = datetime.combine(entry.entry_date, entry.entry_time)
-        sheet.append(
-            [
-                entry.entry_date.isoformat(),
-                entry.entry_time.strftime("%H:%M:%S"),
-                round(entry.seconds, 3),
-                dt,
-            ]
-        )
+        sheet.append([entry.entry_datetime, round(entry.seconds, 3)])
 
-    sheet.column_dimensions["A"].width = 14
+    for row in range(2, sheet.max_row + 1):
+        sheet.cell(row=row, column=1).number_format = "yyyy-mm-dd hh:mm:ss"
+
+    sheet.column_dimensions["A"].width = 22
     sheet.column_dimensions["B"].width = 12
-    sheet.column_dimensions["C"].width = 12
-    sheet.column_dimensions["D"].hidden = True
 
     if entries:
         add_line_chart(sheet, chart_title)
@@ -170,8 +173,8 @@ def add_line_chart(sheet: Worksheet, chart_title: str) -> None:
     chart.height = 12
     chart.width = 24
 
-    values = Reference(sheet, min_col=3, min_row=1, max_row=row_count)
-    categories = Reference(sheet, min_col=4, min_row=2, max_row=row_count)
+    values = Reference(sheet, min_col=2, min_row=1, max_row=row_count)
+    categories = Reference(sheet, min_col=1, min_row=2, max_row=row_count)
     chart.add_data(values, titles_from_data=True)
     chart.set_categories(categories)
 
@@ -227,12 +230,17 @@ def load_config_file(config_path: Path) -> ProcessorConfig:
     if value_divisor <= 0:
         raise ValueError("'value_divisor' must be greater than zero.")
 
+    min_seconds = float(raw.get("min_seconds", 0))
+    if min_seconds < 0:
+        raise ValueError("'min_seconds' must be zero or greater.")
+
     log_files = [resolve_path(str(item), base_dir) for item in log_files_raw]
 
     return ProcessorConfig(
         start_date=start_date,
         line_pattern=str(line_pattern),
         value_divisor=value_divisor,
+        min_seconds=min_seconds,
         output_file=output_file,
         log_files=log_files,
     )
@@ -244,6 +252,7 @@ def merge_config(
     cli_pattern: str | None,
     cli_output: str | None,
     cli_log_files: list[Path] | None,
+    cli_min_seconds: float | None,
     config_base_dir: Path,
 ) -> ProcessorConfig:
     if file_config is None:
@@ -259,6 +268,7 @@ def merge_config(
             start_date=cli_start_date,
             line_pattern=cli_pattern,
             value_divisor=1000.0,
+            min_seconds=cli_min_seconds if cli_min_seconds is not None else 0.0,
             output_file=output_file,
             log_files=[path.resolve() for path in cli_log_files],
         )
@@ -288,10 +298,15 @@ def merge_config(
             "settings.start_date in the config file."
         )
 
+    min_seconds = (
+        cli_min_seconds if cli_min_seconds is not None else file_config.min_seconds
+    )
+
     return ProcessorConfig(
         start_date=merged_start_date,
         line_pattern=line_pattern,
         value_divisor=file_config.value_divisor,
+        min_seconds=min_seconds,
         output_file=output_file.resolve(),
         log_files=log_files,
     )
@@ -325,7 +340,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--pattern",
         default=None,
-        help="Override config: line pattern with 'X' as the numeric placeholder.",
+        help="Override config: line pattern with 'x' as the numeric placeholder.",
+    )
+    parser.add_argument(
+        "--min-seconds",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help=(
+            "Only include lines where duration is greater than this many seconds. "
+            "Overrides min_seconds in config (default: 0, include all)."
+        ),
     )
     parser.add_argument(
         "-o",
@@ -393,6 +418,7 @@ def main() -> int:
             cli_pattern=args.pattern,
             cli_output=args.output,
             cli_log_files=collect_cli_log_files(args),
+            cli_min_seconds=args.min_seconds,
             config_base_dir=config_base_dir,
         )
     except ValueError as exc:
@@ -424,7 +450,7 @@ def main() -> int:
 
     used_sheet_names: set[str] = set()
     total_rows = 0
-    chart_title = f"{config.line_pattern.replace('X', 'value')} (seconds)"
+    chart_title = f"{PLACEHOLDER_SPLIT.sub('value', config.line_pattern)} (seconds)"
 
     for log_path in config.log_files:
         resolved = log_path.resolve()
@@ -433,6 +459,7 @@ def main() -> int:
             line_pattern,
             config.start_date,
             config.value_divisor,
+            config.min_seconds,
         )
         sheet_name = sanitize_sheet_name(resolved, used_sheet_names)
         write_sheet(workbook, sheet_name, entries, chart_title)
@@ -444,8 +471,14 @@ def main() -> int:
         return 1
 
     workbook.save(config.output_file)
+    min_filter = (
+        f"min_seconds: >{config.min_seconds}"
+        if config.min_seconds > 0
+        else "min_seconds: none"
+    )
     print(
         f"\nPattern: {config.line_pattern!r}"
+        f"\n{min_filter}"
         f"\nWrote {config.output_file} ({len(workbook.sheetnames)} sheet(s), {total_rows} row(s))."
     )
     return 0
