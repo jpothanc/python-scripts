@@ -1,0 +1,18 @@
+settings:
+  # Optional if you pass --start-date on the command line
+  start_date: 2026-06-01
+
+  # Output Excel workbook (relative paths are resolved from this config file's folder)
+  output_file: log_analysis.xlsx
+
+# Log line pattern to match. Use X where the numeric duration appears in the log.
+# Example log line: "Web cache retrieval took 150 ms"
+line_pattern: "Web cache retrieval took X ms"
+
+# Divide the captured number by this to produce seconds (1000 = milliseconds, 1 = already seconds)
+value_divisor: 1000
+
+# Optional if you pass -f/--log-file or positional paths on the command line
+log_files:
+  - sample_logs/server-a.log
+  - sample_logs/server-b.log
