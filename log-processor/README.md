@@ -40,7 +40,8 @@ This writes `log_analysis.xlsx` using the sample logs under `sample_logs/`.
 6. Parses the **time** on each line (no date in the log).
 7. Assigns a **calendar date** starting from the start date; when the time moves backward (e.g. `23:59` then `00:02`), the date advances by one day.
 8. Writes one Excel sheet per log file (sheet name = file name without extension).
-9. Adds a **Summary** sheet (first tab) with all logs combined (**Source**, **DateTime**, **Seconds**, **Bucket**).
+9. Adds an **All** sheet with every matching line from all logs (**Source**, **DateTime**, **Seconds**, **Bucket**).
+10. Adds a **Summary** sheet (first tab) with run details at the top, bucket counts, and per-file stats (avg, median, P95, max, % slow, time range).
 
 ### Example log line
 
@@ -174,8 +175,9 @@ py process_logs.py -c C:\configs\prod.yaml -d 2026-06-01
 ## Output
 
 - Single `.xlsx` file (default: `log_analysis.xlsx`).
-- **Summary** sheet (first tab): **Source**, **DateTime**, **Seconds**, **Bucket** — all logs in one table, sorted by time. AutoFilter enabled.
-- One worksheet per input log file: **DateTime**, **Seconds**, **Bucket** (one extra column for filtering).
+- **Summary** sheet (first tab): info block (generated time, start date, pattern, filters, log files), then per-source bucket counts plus **Avg**, **Median**, **P95**, **Max**, **%>1 min**, **%>5 min**, **First/Last seen**, and **Details**. Includes an **ALL SOURCES** total row when multiple logs are processed.
+- **All** sheet: **Source**, **DateTime**, **Seconds**, **Bucket** — all logs combined, sorted by time. AutoFilter enabled.
+- One worksheet per input log file: **DateTime**, **Seconds**, **Bucket**.
 
 ## Project layout
 

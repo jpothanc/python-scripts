@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import statistics
 import sys
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
@@ -12,7 +13,7 @@ from pathlib import Path
 
 import yaml
 from openpyxl import Workbook
-from openpyxl.styles import Alignment
+from openpyxl.styles import Alignment, Font
 from openpyxl.utils import get_column_letter
 from openpyxl.workbook.child import INVALID_TITLE_REGEX
 from openpyxl.worksheet.worksheet import Worksheet
@@ -44,6 +45,30 @@ class ProcessorConfig:
     min_seconds: float
     output_file: Path
     log_files: list[Path]
+
+
+@dataclass(frozen=True)
+class SourceInsights:
+    counts: dict[str, int]
+    total: int
+    avg_seconds: float
+    median_seconds: float
+    p95_seconds: float
+    max_seconds: float
+    pct_over_1min: float
+    pct_over_5min: float
+    first_seen: datetime | None
+    last_seen: datetime | None
+
+
+@dataclass(frozen=True)
+class SummaryContext:
+    start_date: date
+    line_pattern: str
+    min_seconds: float
+    output_file: Path
+    log_files: list[Path]
+    generated_at: datetime
 
 
 def pattern_to_regex(pattern: str) -> re.Pattern[str]:
@@ -139,7 +164,19 @@ def sanitize_sheet_name(file_path: Path, used_names: set[str]) -> str:
     return candidate
 
 
+ALL_SHEET_NAME = "All"
 SUMMARY_SHEET_NAME = "Summary"
+
+BUCKET_LABELS: tuple[str, ...] = (
+    "<=10s",
+    ">10s",
+    ">30s",
+    ">1min",
+    ">2min",
+    ">3min",
+    ">4min",
+    ">5min",
+)
 
 
 def duration_bucket(seconds: float) -> str:
@@ -213,11 +250,103 @@ def write_sheet(
     return sheet
 
 
-def write_summary_sheet(
+def count_buckets(entries: list[LogEntry]) -> dict[str, int]:
+    counts = dict.fromkeys(BUCKET_LABELS, 0)
+    for entry in entries:
+        counts[duration_bucket(entry.seconds)] += 1
+    return counts
+
+
+def format_bucket_details(counts: dict[str, int]) -> str:
+    parts = [f"{label}: {counts[label]} times" for label in BUCKET_LABELS if counts[label] > 0]
+    return ", ".join(parts) if parts else "no entries"
+
+
+def percentile(seconds: list[float], pct: float) -> float:
+    if not seconds:
+        return 0.0
+    if len(seconds) == 1:
+        return seconds[0]
+    ordered = sorted(seconds)
+    rank = (len(ordered) - 1) * pct / 100
+    low = int(rank)
+    high = min(low + 1, len(ordered) - 1)
+    weight = rank - low
+    return ordered[low] * (1 - weight) + ordered[high] * weight
+
+
+def build_source_insights(entries: list[LogEntry]) -> SourceInsights:
+    if not entries:
+        empty_counts = dict.fromkeys(BUCKET_LABELS, 0)
+        return SourceInsights(
+            counts=empty_counts,
+            total=0,
+            avg_seconds=0.0,
+            median_seconds=0.0,
+            p95_seconds=0.0,
+            max_seconds=0.0,
+            pct_over_1min=0.0,
+            pct_over_5min=0.0,
+            first_seen=None,
+            last_seen=None,
+        )
+
+    durations = [entry.seconds for entry in entries]
+    datetimes = [entry.entry_datetime for entry in entries]
+    total = len(entries)
+    over_1min = sum(1 for value in durations if value > 60)
+    over_5min = sum(1 for value in durations if value > 300)
+
+    return SourceInsights(
+        counts=count_buckets(entries),
+        total=total,
+        avg_seconds=statistics.mean(durations),
+        median_seconds=statistics.median(durations),
+        p95_seconds=percentile(durations, 95),
+        max_seconds=max(durations),
+        pct_over_1min=round(100 * over_1min / total, 1),
+        pct_over_5min=round(100 * over_5min / total, 1),
+        first_seen=min(datetimes),
+        last_seen=max(datetimes),
+    )
+
+
+def write_summary_info_block(sheet: Worksheet, context: SummaryContext) -> int:
+    """Write run context at the top; return the row number where the data table starts."""
+    sheet["A1"] = "Log Analysis Summary"
+    sheet["A1"].font = Font(bold=True, size=14)
+
+    min_filter = (
+        f">{context.min_seconds}s only"
+        if context.min_seconds > 0
+        else "none (all matching lines)"
+    )
+    log_file_names = ", ".join(path.name for path in context.log_files)
+
+    info_rows = [
+        ("Generated", context.generated_at.strftime("%Y-%m-%d %H:%M:%S")),
+        ("Start date", context.start_date.isoformat()),
+        ("Line pattern", context.line_pattern),
+        ("Min filter", min_filter),
+        ("Output file", context.output_file.name),
+        ("Log files", log_file_names),
+    ]
+
+    for index, (label, value) in enumerate(info_rows, start=2):
+        sheet.cell(row=index, column=1, value=label).font = Font(bold=True)
+        sheet.cell(row=index, column=2, value=value)
+
+    sheet.column_dimensions["A"].width = 16
+    sheet.column_dimensions["B"].width = 52
+
+    return len(info_rows) + 3
+
+
+def write_all_sheet(
     workbook: Workbook,
     rows: list[tuple[str, LogEntry]],
 ) -> Worksheet:
-    sheet = workbook.create_sheet(title=SUMMARY_SHEET_NAME, index=0)
+    sheet = workbook.create_sheet(title=ALL_SHEET_NAME, index=0)
     sheet.append(["Source", "DateTime", "Seconds", "Bucket"])
 
     for source, entry in sorted(rows, key=lambda item: (item[1].entry_datetime, item[0])):
@@ -232,6 +361,94 @@ def write_summary_sheet(
         bucket_width=10,
     )
     sheet.column_dimensions["A"].width = 18
+
+    return sheet
+
+
+def write_bucket_summary_sheet(
+    workbook: Workbook,
+    source_entries: list[tuple[str, list[LogEntry]]],
+    context: SummaryContext,
+) -> Worksheet:
+    sheet = workbook.create_sheet(title=SUMMARY_SHEET_NAME, index=0)
+    table_start = write_summary_info_block(sheet, context)
+
+    metric_headers = [
+        "Avg (s)",
+        "Median (s)",
+        "P95 (s)",
+        "Max (s)",
+        "%>1 min",
+        "%>5 min",
+        "First seen",
+        "Last seen",
+        "Details",
+    ]
+    headers = ["Source", *BUCKET_LABELS, "Total", *metric_headers]
+    for col, header in enumerate(headers, start=1):
+        cell = sheet.cell(row=table_start, column=col, value=header)
+        cell.font = Font(bold=True)
+        cell.alignment = Alignment(horizontal="center")
+
+    center = Alignment(horizontal="center")
+    data_row = table_start + 1
+
+    for source, entries in source_entries:
+        insights = build_source_insights(entries)
+        row_values = [
+            source,
+            *[insights.counts[label] for label in BUCKET_LABELS],
+            insights.total,
+            round(insights.avg_seconds, 3),
+            round(insights.median_seconds, 3),
+            round(insights.p95_seconds, 3),
+            round(insights.max_seconds, 3),
+            insights.pct_over_1min,
+            insights.pct_over_5min,
+            insights.first_seen,
+            insights.last_seen,
+            format_bucket_details(insights.counts),
+        ]
+        for col, value in enumerate(row_values, start=1):
+            sheet.cell(row=data_row, column=col, value=value)
+        data_row += 1
+
+    all_entries = [entry for _, entries in source_entries for entry in entries]
+    if len(source_entries) > 1 and all_entries:
+        combined = build_source_insights(all_entries)
+        row_values = [
+            "ALL SOURCES",
+            *[combined.counts[label] for label in BUCKET_LABELS],
+            combined.total,
+            round(combined.avg_seconds, 3),
+            round(combined.median_seconds, 3),
+            round(combined.p95_seconds, 3),
+            round(combined.max_seconds, 3),
+            combined.pct_over_1min,
+            combined.pct_over_5min,
+            combined.first_seen,
+            combined.last_seen,
+            format_bucket_details(combined.counts),
+        ]
+        for col, value in enumerate(row_values, start=1):
+            cell = sheet.cell(row=data_row, column=col, value=value)
+            cell.font = Font(bold=True)
+        data_row += 1
+
+    first_seen_col = len(headers) - 2
+    last_seen_col = len(headers) - 1
+    for row in range(table_start + 1, data_row):
+        sheet.cell(row=row, column=first_seen_col).number_format = "yyyy-mm-dd hh:mm:ss"
+        sheet.cell(row=row, column=last_seen_col).number_format = "yyyy-mm-dd hh:mm:ss"
+
+    for col in range(2, len(headers)):
+        sheet.column_dimensions[get_column_letter(col)].width = 10
+    sheet.column_dimensions["A"].width = 18
+    sheet.column_dimensions[get_column_letter(len(headers))].width = 40
+
+    for row in range(table_start + 1, data_row):
+        for col in range(2, len(headers) + 1):
+            sheet.cell(row=row, column=col).alignment = center
 
     return sheet
 
@@ -498,9 +715,10 @@ def main() -> int:
     workbook = Workbook()
     workbook.remove(workbook.active)
 
-    used_sheet_names: set[str] = {SUMMARY_SHEET_NAME}
+    used_sheet_names: set[str] = {SUMMARY_SHEET_NAME, ALL_SHEET_NAME}
     total_rows = 0
-    summary_rows: list[tuple[str, LogEntry]] = []
+    all_rows: list[tuple[str, LogEntry]] = []
+    source_entries: list[tuple[str, list[LogEntry]]] = []
 
     for log_path in config.log_files:
         resolved = log_path.resolve()
@@ -514,16 +732,27 @@ def main() -> int:
         sheet_name = sanitize_sheet_name(resolved, used_sheet_names)
         write_sheet(workbook, sheet_name, entries)
         source_label = resolved.stem
-        summary_rows.extend((source_label, entry) for entry in entries)
+        source_entries.append((source_label, entries))
+        all_rows.extend((source_label, entry) for entry in entries)
         total_rows += len(entries)
         print(f"{resolved.name}: {len(entries)} matching line(s) -> sheet '{sheet_name}'")
 
-    if not summary_rows:
+    if not all_rows:
         print("No matching lines found in any log file.", file=sys.stderr)
         return 1
 
-    write_summary_sheet(workbook, summary_rows)
-    print(f"Summary: {len(summary_rows)} row(s) -> sheet '{SUMMARY_SHEET_NAME}'")
+    write_all_sheet(workbook, all_rows)
+    summary_context = SummaryContext(
+        start_date=config.start_date,
+        line_pattern=config.line_pattern,
+        min_seconds=config.min_seconds,
+        output_file=config.output_file,
+        log_files=config.log_files,
+        generated_at=datetime.now(),
+    )
+    write_bucket_summary_sheet(workbook, source_entries, summary_context)
+    print(f"All: {len(all_rows)} row(s) -> sheet '{ALL_SHEET_NAME}'")
+    print(f"Summary: bucket counts for {len(source_entries)} source(s) -> sheet '{SUMMARY_SHEET_NAME}'")
 
     workbook.save(config.output_file)
     min_filter = (
