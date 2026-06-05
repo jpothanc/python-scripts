@@ -12,22 +12,12 @@ from pathlib import Path
 
 import yaml
 from openpyxl import Workbook
+from openpyxl.styles import Alignment
 from openpyxl.utils import get_column_letter
 from openpyxl.workbook.child import INVALID_TITLE_REGEX
 from openpyxl.worksheet.worksheet import Worksheet
 
 MAX_LOG_FILES = 4
-
-# Flag columns: Yes when Seconds is greater than each threshold.
-DURATION_THRESHOLDS: tuple[tuple[str, float], ...] = (
-    (">10s", 10),
-    (">30s", 30),
-    (">1min", 60),
-    (">2min", 120),
-    (">3min", 180),
-    (">4min", 240),
-    (">5min", 300),
-)
 
 TIME_PATTERN = re.compile(
     r"(?<!\d)"
@@ -149,10 +139,6 @@ def sanitize_sheet_name(file_path: Path, used_names: set[str]) -> str:
     return candidate
 
 
-def duration_threshold_flags(seconds: float) -> list[str]:
-    return ["Yes" if seconds > threshold else "" for _, threshold in DURATION_THRESHOLDS]
-
-
 SUMMARY_SHEET_NAME = "Summary"
 
 
@@ -175,15 +161,12 @@ def duration_bucket(seconds: float) -> str:
     return "<=10s"
 
 
-def entry_row_values(entry: LogEntry, *, include_thresholds: bool) -> list:
-    row = [
+def entry_row_values(entry: LogEntry) -> list:
+    return [
         entry.entry_datetime,
         round(entry.seconds, 3),
         duration_bucket(entry.seconds),
     ]
-    if include_thresholds:
-        row.extend(duration_threshold_flags(entry.seconds))
-    return row
 
 
 def apply_datetime_format(sheet: Worksheet, datetime_column: int) -> None:
@@ -191,73 +174,64 @@ def apply_datetime_format(sheet: Worksheet, datetime_column: int) -> None:
         sheet.cell(row=row, column=datetime_column).number_format = "yyyy-mm-dd hh:mm:ss"
 
 
+def style_bucket_column(sheet: Worksheet, bucket_column: int) -> None:
+    center = Alignment(horizontal="center")
+    for row in range(1, sheet.max_row + 1):
+        sheet.cell(row=row, column=bucket_column).alignment = center
+
+
+def apply_sheet_layout(
+    sheet: Worksheet,
+    *,
+    datetime_column: int,
+    bucket_column: int,
+    datetime_width: int = 22,
+    seconds_width: int = 12,
+    bucket_width: int = 10,
+) -> None:
+    apply_datetime_format(sheet, datetime_column)
+    style_bucket_column(sheet, bucket_column)
+    sheet.column_dimensions[get_column_letter(datetime_column)].width = datetime_width
+    sheet.column_dimensions[get_column_letter(bucket_column - 1)].width = seconds_width
+    sheet.column_dimensions[get_column_letter(bucket_column)].width = bucket_width
+    if sheet.max_row > 1:
+        sheet.auto_filter.ref = sheet.dimensions
+
+
 def write_sheet(
     workbook: Workbook,
     sheet_name: str,
     entries: list[LogEntry],
 ) -> Worksheet:
-    threshold_headers = [label for label, _ in DURATION_THRESHOLDS]
     sheet = workbook.create_sheet(title=sheet_name)
-    sheet.append(["DateTime", "Seconds", "Bucket", *threshold_headers])
+    sheet.append(["DateTime", "Seconds", "Bucket"])
 
     for entry in entries:
-        sheet.append(entry_row_values(entry, include_thresholds=True))
+        sheet.append(entry_row_values(entry))
 
-    apply_datetime_format(sheet, datetime_column=1)
-
-    sheet.column_dimensions["A"].width = 22
-    sheet.column_dimensions["B"].width = 12
-    sheet.column_dimensions["C"].width = 10
-    for col in range(4, 4 + len(DURATION_THRESHOLDS)):
-        sheet.column_dimensions[get_column_letter(col)].width = 8
-
+    apply_sheet_layout(sheet, datetime_column=1, bucket_column=3)
     return sheet
 
 
 def write_summary_sheet(
     workbook: Workbook,
-    source_entries: list[tuple[str, list[LogEntry]]],
+    rows: list[tuple[str, LogEntry]],
 ) -> Worksheet:
-    """Wide layout: two columns per log (DateTime, Seconds) plus one Bucket filter column."""
     sheet = workbook.create_sheet(title=SUMMARY_SHEET_NAME, index=0)
+    sheet.append(["Source", "DateTime", "Seconds", "Bucket"])
 
-    headers: list[str] = []
-    for source, _ in source_entries:
-        headers.extend([f"{source} DateTime", f"{source} Seconds"])
-    headers.append("Bucket")
-    sheet.append(headers)
+    for source, entry in sorted(rows, key=lambda item: (item[1].entry_datetime, item[0])):
+        sheet.append([source, *entry_row_values(entry)])
 
-    max_rows = max((len(entries) for _, entries in source_entries), default=0)
-
-    for row_index in range(max_rows):
-        row: list = []
-        seconds_in_row: list[float] = []
-
-        for _, entries in source_entries:
-            if row_index < len(entries):
-                entry = entries[row_index]
-                row.extend([entry.entry_datetime, round(entry.seconds, 3)])
-                seconds_in_row.append(entry.seconds)
-            else:
-                row.extend(["", ""])
-
-        row.append(duration_bucket(max(seconds_in_row)) if seconds_in_row else "")
-        sheet.append(row)
-
-    for source_index in range(len(source_entries)):
-        apply_datetime_format(sheet, datetime_column=1 + source_index * 2)
-
-    for source_index in range(len(source_entries)):
-        dt_col = 1 + source_index * 2
-        sec_col = dt_col + 1
-        sheet.column_dimensions[get_column_letter(dt_col)].width = 22
-        sheet.column_dimensions[get_column_letter(sec_col)].width = 12
-
-    bucket_col = len(source_entries) * 2 + 1
-    sheet.column_dimensions[get_column_letter(bucket_col)].width = 10
-
-    if max_rows > 0:
-        sheet.auto_filter.ref = sheet.dimensions
+    apply_sheet_layout(
+        sheet,
+        datetime_column=2,
+        bucket_column=4,
+        datetime_width=22,
+        seconds_width=12,
+        bucket_width=10,
+    )
+    sheet.column_dimensions["A"].width = 18
 
     return sheet
 
@@ -526,7 +500,7 @@ def main() -> int:
 
     used_sheet_names: set[str] = {SUMMARY_SHEET_NAME}
     total_rows = 0
-    source_entries: list[tuple[str, list[LogEntry]]] = []
+    summary_rows: list[tuple[str, LogEntry]] = []
 
     for log_path in config.log_files:
         resolved = log_path.resolve()
@@ -540,20 +514,16 @@ def main() -> int:
         sheet_name = sanitize_sheet_name(resolved, used_sheet_names)
         write_sheet(workbook, sheet_name, entries)
         source_label = resolved.stem
-        source_entries.append((source_label, entries))
+        summary_rows.extend((source_label, entry) for entry in entries)
         total_rows += len(entries)
         print(f"{resolved.name}: {len(entries)} matching line(s) -> sheet '{sheet_name}'")
 
-    if not source_entries:
+    if not summary_rows:
         print("No matching lines found in any log file.", file=sys.stderr)
         return 1
 
-    summary_row_count = max(len(entries) for _, entries in source_entries)
-    write_summary_sheet(workbook, source_entries)
-    print(
-        f"Summary: {summary_row_count} aligned row(s), "
-        f"{len(source_entries)} source(s) -> sheet '{SUMMARY_SHEET_NAME}'"
-    )
+    write_summary_sheet(workbook, summary_rows)
+    print(f"Summary: {len(summary_rows)} row(s) -> sheet '{SUMMARY_SHEET_NAME}'")
 
     workbook.save(config.output_file)
     min_filter = (

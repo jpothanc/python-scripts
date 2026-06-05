@@ -40,7 +40,7 @@ This writes `log_analysis.xlsx` using the sample logs under `sample_logs/`.
 6. Parses the **time** on each line (no date in the log).
 7. Assigns a **calendar date** starting from the start date; when the time moves backward (e.g. `23:59` then `00:02`), the date advances by one day.
 8. Writes one Excel sheet per log file (sheet name = file name without extension).
-9. Adds a **Summary** sheet (first tab) in a **side-by-side** layout: two columns per log file (**DateTime**, **Seconds**) plus one **Bucket** filter column (e.g. 5 columns for 2 logs).
+9. Adds a **Summary** sheet (first tab) with all logs combined (**Source**, **DateTime**, **Seconds**, **Bucket**).
 
 ### Example log line
 
@@ -50,12 +50,12 @@ This writes `log_analysis.xlsx` using the sample logs under `sample_logs/`.
 
 With pattern `DB retrieval took x millis` and start date `2026-06-01`, the first rows might be:
 
-| DateTime            | Seconds | Bucket | >10s | >30s | >1min | >2min | >3min | >4min | >5min |
-|---------------------|---------|--------|------|------|-------|-------|-------|-------|-------|
-| 2026-06-01 23:58:10 | 0.12    | <=10s  |      |      |       |       |       |       |       |
-| 2026-06-02 00:02:30 | 125.0   | >2min  | Yes  | Yes  | Yes   | Yes   |       |       |       |
+| DateTime            | Seconds | Bucket |
+|---------------------|---------|--------|
+| 2026-06-01 23:58:10 | 0.12    | <=10s  |
+| 2026-06-02 00:02:30 | 2.1     | <=10s  |
 
-**Bucket** — one label per row (<=10s, >10s, >30s, …, >5 min). **>10s** … **>5min** — `Yes` when duration exceeds that threshold (use Excel AutoFilter on `Yes`).
+**Bucket** — one label per row (`<=10s`, `>10s`, `>30s`, `>1min`, `>2min`, `>3min`, `>4min`, `>5min`). Use Excel AutoFilter on **Bucket** to filter.
 
 ## Configuration (`config.yaml`)
 
@@ -174,8 +174,8 @@ py process_logs.py -c C:\configs\prod.yaml -d 2026-06-01
 ## Output
 
 - Single `.xlsx` file (default: `log_analysis.xlsx`).
-- **Summary** sheet (first tab): side-by-side columns per log file, e.g. `server-a DateTime | server-a Seconds | server-b DateTime | server-b Seconds | Bucket`. Rows align by entry order (1st match from each log on row 1, etc.). **Bucket** uses the slowest duration on that row. AutoFilter enabled on **Bucket**.
-- One worksheet per input log file with **DateTime**, **Seconds**, **Bucket**, and threshold flags **>10s** … **>5min**.
+- **Summary** sheet (first tab): **Source**, **DateTime**, **Seconds**, **Bucket** — all logs in one table, sorted by time. AutoFilter enabled.
+- One worksheet per input log file: **DateTime**, **Seconds**, **Bucket** (one extra column for filtering).
 
 ## Project layout
 
