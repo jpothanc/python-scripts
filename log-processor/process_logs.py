@@ -13,7 +13,7 @@ from pathlib import Path
 
 import yaml
 from openpyxl import Workbook
-from openpyxl.styles import Alignment, Font
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.workbook.child import INVALID_TITLE_REGEX
 from openpyxl.worksheet.worksheet import Worksheet
@@ -167,6 +167,41 @@ def sanitize_sheet_name(file_path: Path, used_names: set[str]) -> str:
 ALL_SHEET_NAME = "All"
 SUMMARY_SHEET_NAME = "Summary"
 
+# Summary sheet styling
+SUMMARY_TITLE_FILL = PatternFill("solid", fgColor="1E3A5F")
+SUMMARY_TITLE_FONT = Font(bold=True, size=16, color="FFFFFF")
+SUMMARY_LABEL_FILLS = (
+    PatternFill("solid", fgColor="2563EB"),
+    PatternFill("solid", fgColor="3B82F6"),
+    PatternFill("solid", fgColor="0EA5E9"),
+    PatternFill("solid", fgColor="06B6D4"),
+    PatternFill("solid", fgColor="14B8A6"),
+    PatternFill("solid", fgColor="10B981"),
+)
+SUMMARY_VALUE_FILLS = (
+    PatternFill("solid", fgColor="DBEAFE"),
+    PatternFill("solid", fgColor="E0F2FE"),
+    PatternFill("solid", fgColor="CFFAFE"),
+    PatternFill("solid", fgColor="CCFBF1"),
+    PatternFill("solid", fgColor="D1FAE5"),
+    PatternFill("solid", fgColor="DCFCE7"),
+)
+SUMMARY_LABEL_FONT = Font(bold=True, color="FFFFFF", size=11)
+SUMMARY_VALUE_FONT = Font(color="1E293B", size=11)
+TABLE_HEADER_FILL = PatternFill("solid", fgColor="6D28D9")
+TABLE_HEADER_FONT = Font(bold=True, color="FFFFFF", size=10)
+TABLE_ROW_FILL_A = PatternFill("solid", fgColor="FFFFFF")
+TABLE_ROW_FILL_B = PatternFill("solid", fgColor="F5F3FF")
+TABLE_TOTAL_FILL = PatternFill("solid", fgColor="FEF3C7")
+TABLE_TOTAL_FONT = Font(bold=True, color="92400E", size=10)
+BUCKET_HOT_FILL = PatternFill("solid", fgColor="FDE68A")
+THIN_BORDER = Border(
+    left=Side(style="thin", color="CBD5E1"),
+    right=Side(style="thin", color="CBD5E1"),
+    top=Side(style="thin", color="CBD5E1"),
+    bottom=Side(style="thin", color="CBD5E1"),
+)
+
 BUCKET_LABELS: tuple[str, ...] = (
     "<=10s",
     ">10s",
@@ -311,10 +346,37 @@ def build_source_insights(entries: list[LogEntry]) -> SourceInsights:
     )
 
 
+def style_cell(
+    cell,
+    *,
+    fill: PatternFill | None = None,
+    font: Font | None = None,
+    alignment: Alignment | None = None,
+    border: Border | None = None,
+) -> None:
+    if fill is not None:
+        cell.fill = fill
+    if font is not None:
+        cell.font = font
+    if alignment is not None:
+        cell.alignment = alignment
+    if border is not None:
+        cell.border = border
+
+
 def write_summary_info_block(sheet: Worksheet, context: SummaryContext) -> int:
     """Write run context at the top; return the row number where the data table starts."""
-    sheet["A1"] = "Log Analysis Summary"
-    sheet["A1"].font = Font(bold=True, size=14)
+    sheet.merge_cells("A1:B1")
+    title_cell = sheet["A1"]
+    title_cell.value = "Log Analysis Summary"
+    style_cell(
+        title_cell,
+        fill=SUMMARY_TITLE_FILL,
+        font=SUMMARY_TITLE_FONT,
+        alignment=Alignment(horizontal="center", vertical="center"),
+        border=THIN_BORDER,
+    )
+    sheet.row_dimensions[1].height = 28
 
     min_filter = (
         f">{context.min_seconds}s only"
@@ -332,12 +394,29 @@ def write_summary_info_block(sheet: Worksheet, context: SummaryContext) -> int:
         ("Log files", log_file_names),
     ]
 
-    for index, (label, value) in enumerate(info_rows, start=2):
-        sheet.cell(row=index, column=1, value=label).font = Font(bold=True)
-        sheet.cell(row=index, column=2, value=value)
+    for index, (label, value) in enumerate(info_rows):
+        row = index + 2
+        color_index = index % len(SUMMARY_LABEL_FILLS)
+        label_cell = sheet.cell(row=row, column=1, value=label)
+        value_cell = sheet.cell(row=row, column=2, value=value)
+        style_cell(
+            label_cell,
+            fill=SUMMARY_LABEL_FILLS[color_index],
+            font=SUMMARY_LABEL_FONT,
+            alignment=Alignment(horizontal="left", vertical="center"),
+            border=THIN_BORDER,
+        )
+        style_cell(
+            value_cell,
+            fill=SUMMARY_VALUE_FILLS[color_index],
+            font=SUMMARY_VALUE_FONT,
+            alignment=Alignment(horizontal="left", vertical="center", wrap_text=True),
+            border=THIN_BORDER,
+        )
+        sheet.row_dimensions[row].height = 22
 
-    sheet.column_dimensions["A"].width = 16
-    sheet.column_dimensions["B"].width = 52
+    sheet.column_dimensions["A"].width = 18
+    sheet.column_dimensions["B"].width = 54
 
     return len(info_rows) + 3
 
@@ -371,6 +450,7 @@ def write_bucket_summary_sheet(
     context: SummaryContext,
 ) -> Worksheet:
     sheet = workbook.create_sheet(title=SUMMARY_SHEET_NAME, index=0)
+    sheet.sheet_properties.tabColor = "6D28D9"
     table_start = write_summary_info_block(sheet, context)
 
     metric_headers = [
@@ -385,13 +465,38 @@ def write_bucket_summary_sheet(
         "Details",
     ]
     headers = ["Source", *BUCKET_LABELS, "Total", *metric_headers]
+    bucket_col_start = 2
+    bucket_col_end = bucket_col_start + len(BUCKET_LABELS) - 1
+
     for col, header in enumerate(headers, start=1):
         cell = sheet.cell(row=table_start, column=col, value=header)
-        cell.font = Font(bold=True)
-        cell.alignment = Alignment(horizontal="center")
+        style_cell(
+            cell,
+            fill=TABLE_HEADER_FILL,
+            font=TABLE_HEADER_FONT,
+            alignment=Alignment(horizontal="center", vertical="center", wrap_text=True),
+            border=THIN_BORDER,
+        )
+    sheet.row_dimensions[table_start].height = 24
 
-    center = Alignment(horizontal="center")
+    center = Alignment(horizontal="center", vertical="center")
     data_row = table_start + 1
+    source_row_index = 0
+
+    def style_data_row(row_number: int, *, is_total: bool = False) -> None:
+        row_fill = TABLE_TOTAL_FILL if is_total else (
+            TABLE_ROW_FILL_B if source_row_index % 2 else TABLE_ROW_FILL_A
+        )
+        row_font = TABLE_TOTAL_FONT if is_total else Font(color="334155", size=10)
+        for col in range(1, len(headers) + 1):
+            cell = sheet.cell(row=row_number, column=col)
+            style_cell(
+                cell,
+                fill=row_fill,
+                font=row_font,
+                alignment=center if col > 1 else Alignment(horizontal="left", vertical="center"),
+                border=THIN_BORDER,
+            )
 
     for source, entries in source_entries:
         insights = build_source_insights(entries)
@@ -411,6 +516,12 @@ def write_bucket_summary_sheet(
         ]
         for col, value in enumerate(row_values, start=1):
             sheet.cell(row=data_row, column=col, value=value)
+        style_data_row(data_row)
+        for col in range(bucket_col_start, bucket_col_end + 1):
+            cell = sheet.cell(row=data_row, column=col)
+            if isinstance(cell.value, int) and cell.value > 0:
+                cell.fill = BUCKET_HOT_FILL
+        source_row_index += 1
         data_row += 1
 
     all_entries = [entry for _, entries in source_entries for entry in entries]
@@ -431,8 +542,12 @@ def write_bucket_summary_sheet(
             format_bucket_details(combined.counts),
         ]
         for col, value in enumerate(row_values, start=1):
-            cell = sheet.cell(row=data_row, column=col, value=value)
-            cell.font = Font(bold=True)
+            sheet.cell(row=data_row, column=col, value=value)
+        style_data_row(data_row, is_total=True)
+        for col in range(bucket_col_start, bucket_col_end + 1):
+            cell = sheet.cell(row=data_row, column=col)
+            if isinstance(cell.value, int) and cell.value > 0:
+                cell.fill = PatternFill("solid", fgColor="FCD34D")
         data_row += 1
 
     first_seen_col = len(headers) - 2
@@ -440,15 +555,14 @@ def write_bucket_summary_sheet(
     for row in range(table_start + 1, data_row):
         sheet.cell(row=row, column=first_seen_col).number_format = "yyyy-mm-dd hh:mm:ss"
         sheet.cell(row=row, column=last_seen_col).number_format = "yyyy-mm-dd hh:mm:ss"
+        sheet.row_dimensions[row].height = 20
 
     for col in range(2, len(headers)):
         sheet.column_dimensions[get_column_letter(col)].width = 10
     sheet.column_dimensions["A"].width = 18
     sheet.column_dimensions[get_column_letter(len(headers))].width = 40
 
-    for row in range(table_start + 1, data_row):
-        for col in range(2, len(headers) + 1):
-            sheet.cell(row=row, column=col).alignment = center
+    sheet.freeze_panes = sheet.cell(row=table_start + 1, column=1)
 
     return sheet
 
