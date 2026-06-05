@@ -64,6 +64,9 @@ With pattern `DB retrieval took x millis` and start date `2026-06-01`, the first
 settings:
   start_date: 2026-06-01      # optional if you pass --start-date
   output_file: log_analysis.xlsx
+  business_hours:
+    start: "09:00"            # inclusive
+    end: "16:00"              # inclusive (9 AM to 4 PM)
 
 line_pattern: "DB retrieval took x millis"
 
@@ -175,9 +178,9 @@ py process_logs.py -c C:\configs\prod.yaml -d 2026-06-01
 ## Output
 
 - Single `.xlsx` file (default: `log_analysis.xlsx`).
-- **Summary** sheet (first tab): info block (generated time, start date, pattern, filters, log files), then per-source bucket counts plus **Avg**, **Median**, **P95**, **Max**, **%>1 min**, **%>5 min**, **First/Last seen**, and **Details**. Includes an **ALL SOURCES** total row when multiple logs are processed.
-- **All** sheet: **Source**, **DateTime**, **Seconds**, **Bucket** — all logs combined, sorted by time. AutoFilter enabled.
-- One worksheet per input log file: **DateTime**, **Seconds**, **Bucket**.
+- **Summary** sheet (first tab): info block, then three sections — **Performance summary** (totals, BH Y/N, stats), **Bucket counts — business hours**, and **Bucket counts — outside business hours** (each with bucket columns and an **ALL SOURCES** row when multiple logs are processed).
+- **All** sheet: **Source**, **DateTime**, **Seconds**, **Bucket**, **Business Hours** (`Y`/`N`).
+- One worksheet per input log file: **DateTime**, **Seconds**, **Bucket**, **Business Hours** (`Y`/`N`).
 
 ## Project layout
 
