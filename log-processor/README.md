@@ -1,6 +1,6 @@
 # Log Processor
 
-Process up to four timestamp-only log files, extract lines matching a configurable pattern, assign calendar dates from a start date, and export results to a single Excel workbook with one sheet and line chart per log file.
+Process up to four timestamp-only log files, extract lines matching a configurable pattern, assign calendar dates from a start date, and export results to a single Excel workbook with one sheet per log file.
 
 ## Requirements
 
@@ -40,7 +40,7 @@ This writes `log_analysis.xlsx` using the sample logs under `sample_logs/`.
 6. Parses the **time** on each line (no date in the log).
 7. Assigns a **calendar date** starting from the start date; when the time moves backward (e.g. `23:59` then `00:02`), the date advances by one day.
 8. Writes one Excel sheet per log file (sheet name = file name without extension).
-9. Adds a **line chart** below the data on each sheet (seconds vs. combined date/time).
+9. Adds a **Summary** sheet (first tab) in a **side-by-side** layout: two columns per log file (**DateTime**, **Seconds**) plus one **Bucket** filter column (e.g. 5 columns for 2 logs).
 
 ### Example log line
 
@@ -50,11 +50,12 @@ This writes `log_analysis.xlsx` using the sample logs under `sample_logs/`.
 
 With pattern `DB retrieval took x millis` and start date `2026-06-01`, the first rows might be:
 
-| DateTime            | Seconds |
-|---------------------|---------|
-| 2026-06-01 23:58:10 | 0.12    |
-| 2026-06-01 23:59:45 | 0.095   |
-| 2026-06-02 00:02:30 | 2.1     |
+| DateTime            | Seconds | Bucket | >10s | >30s | >1min | >2min | >3min | >4min | >5min |
+|---------------------|---------|--------|------|------|-------|-------|-------|-------|-------|
+| 2026-06-01 23:58:10 | 0.12    | <=10s  |      |      |       |       |       |       |       |
+| 2026-06-02 00:02:30 | 125.0   | >2min  | Yes  | Yes  | Yes   | Yes   |       |       |       |
+
+**Bucket** — one label per row (<=10s, >10s, >30s, …, >5 min). **>10s** … **>5min** — `Yes` when duration exceeds that threshold (use Excel AutoFilter on `Yes`).
 
 ## Configuration (`config.yaml`)
 
@@ -173,11 +174,8 @@ py process_logs.py -c C:\configs\prod.yaml -d 2026-06-01
 ## Output
 
 - Single `.xlsx` file (default: `log_analysis.xlsx`).
-- One worksheet per input log file.
-- Columns: **DateTime** (combined date and time), **Seconds**.
-- Line chart under the table on each sheet when there is at least one matching line.
-
-Open the file in Microsoft Excel to view charts; some viewers only show the table.
+- **Summary** sheet (first tab): side-by-side columns per log file, e.g. `server-a DateTime | server-a Seconds | server-b DateTime | server-b Seconds | Bucket`. Rows align by entry order (1st match from each log on row 1, etc.). **Bucket** uses the slowest duration on that row. AutoFilter enabled on **Bucket**.
+- One worksheet per input log file with **DateTime**, **Seconds**, **Bucket**, and threshold flags **>10s** … **>5min**.
 
 ## Project layout
 
@@ -205,4 +203,3 @@ log-processor/
 | `python` not found | Use `py` instead of `python` |
 | No matching lines | Check `line_pattern` matches your log text; ensure `X` is where the number is |
 | Wrong dates | Verify `--start-date`; midnight rollover assumes logs are in chronological order |
-| Chart not visible | Open in Excel desktop and scroll below the data rows on each sheet |

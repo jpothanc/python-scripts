@@ -12,12 +12,22 @@ from pathlib import Path
 
 import yaml
 from openpyxl import Workbook
-from openpyxl.chart import LineChart, Reference
-from openpyxl.chart.axis import DateAxis
+from openpyxl.utils import get_column_letter
 from openpyxl.workbook.child import INVALID_TITLE_REGEX
 from openpyxl.worksheet.worksheet import Worksheet
 
 MAX_LOG_FILES = 4
+
+# Flag columns: Yes when Seconds is greater than each threshold.
+DURATION_THRESHOLDS: tuple[tuple[str, float], ...] = (
+    (">10s", 10),
+    (">30s", 30),
+    (">1min", 60),
+    (">2min", 120),
+    (">3min", 180),
+    (">4min", 240),
+    (">5min", 300),
+)
 
 TIME_PATTERN = re.compile(
     r"(?<!\d)"
@@ -139,51 +149,117 @@ def sanitize_sheet_name(file_path: Path, used_names: set[str]) -> str:
     return candidate
 
 
+def duration_threshold_flags(seconds: float) -> list[str]:
+    return ["Yes" if seconds > threshold else "" for _, threshold in DURATION_THRESHOLDS]
+
+
+SUMMARY_SHEET_NAME = "Summary"
+
+
+def duration_bucket(seconds: float) -> str:
+    """Single mutually exclusive bucket label for Excel filtering."""
+    if seconds > 300:
+        return ">5 min"
+    if seconds > 240:
+        return ">4 min"
+    if seconds > 180:
+        return ">3 min"
+    if seconds > 120:
+        return ">2 min"
+    if seconds > 60:
+        return ">1 min"
+    if seconds > 30:
+        return ">30s"
+    if seconds > 10:
+        return ">10s"
+    return "<=10s"
+
+
+def entry_row_values(entry: LogEntry, *, include_thresholds: bool) -> list:
+    row = [
+        entry.entry_datetime,
+        round(entry.seconds, 3),
+        duration_bucket(entry.seconds),
+    ]
+    if include_thresholds:
+        row.extend(duration_threshold_flags(entry.seconds))
+    return row
+
+
+def apply_datetime_format(sheet: Worksheet, datetime_column: int) -> None:
+    for row in range(2, sheet.max_row + 1):
+        sheet.cell(row=row, column=datetime_column).number_format = "yyyy-mm-dd hh:mm:ss"
+
+
 def write_sheet(
     workbook: Workbook,
     sheet_name: str,
     entries: list[LogEntry],
-    chart_title: str,
 ) -> Worksheet:
+    threshold_headers = [label for label, _ in DURATION_THRESHOLDS]
     sheet = workbook.create_sheet(title=sheet_name)
-    sheet.append(["DateTime", "Seconds"])
+    sheet.append(["DateTime", "Seconds", "Bucket", *threshold_headers])
 
     for entry in entries:
-        sheet.append([entry.entry_datetime, round(entry.seconds, 3)])
+        sheet.append(entry_row_values(entry, include_thresholds=True))
 
-    for row in range(2, sheet.max_row + 1):
-        sheet.cell(row=row, column=1).number_format = "yyyy-mm-dd hh:mm:ss"
+    apply_datetime_format(sheet, datetime_column=1)
 
     sheet.column_dimensions["A"].width = 22
     sheet.column_dimensions["B"].width = 12
-
-    if entries:
-        add_line_chart(sheet, chart_title)
+    sheet.column_dimensions["C"].width = 10
+    for col in range(4, 4 + len(DURATION_THRESHOLDS)):
+        sheet.column_dimensions[get_column_letter(col)].width = 8
 
     return sheet
 
 
-def add_line_chart(sheet: Worksheet, chart_title: str) -> None:
-    row_count = sheet.max_row
-    chart = LineChart()
-    chart.title = chart_title
-    chart.y_axis.title = "Seconds"
-    chart.x_axis.title = "Date / time"
-    chart.style = 2
-    chart.height = 12
-    chart.width = 24
+def write_summary_sheet(
+    workbook: Workbook,
+    source_entries: list[tuple[str, list[LogEntry]]],
+) -> Worksheet:
+    """Wide layout: two columns per log (DateTime, Seconds) plus one Bucket filter column."""
+    sheet = workbook.create_sheet(title=SUMMARY_SHEET_NAME, index=0)
 
-    values = Reference(sheet, min_col=2, min_row=1, max_row=row_count)
-    categories = Reference(sheet, min_col=1, min_row=2, max_row=row_count)
-    chart.add_data(values, titles_from_data=True)
-    chart.set_categories(categories)
+    headers: list[str] = []
+    for source, _ in source_entries:
+        headers.extend([f"{source} DateTime", f"{source} Seconds"])
+    headers.append("Bucket")
+    sheet.append(headers)
 
-    chart.x_axis = DateAxis(crossAx=100)
-    chart.x_axis.number_format = "yyyy-mm-dd hh:mm"
-    chart.x_axis.majorTimeUnit = "days"
+    max_rows = max((len(entries) for _, entries in source_entries), default=0)
 
-    anchor_row = row_count + 3
-    sheet.add_chart(chart, f"A{anchor_row}")
+    for row_index in range(max_rows):
+        row: list = []
+        seconds_in_row: list[float] = []
+
+        for _, entries in source_entries:
+            if row_index < len(entries):
+                entry = entries[row_index]
+                row.extend([entry.entry_datetime, round(entry.seconds, 3)])
+                seconds_in_row.append(entry.seconds)
+            else:
+                row.extend(["", ""])
+
+        row.append(duration_bucket(max(seconds_in_row)) if seconds_in_row else "")
+        sheet.append(row)
+
+    for source_index in range(len(source_entries)):
+        apply_datetime_format(sheet, datetime_column=1 + source_index * 2)
+
+    for source_index in range(len(source_entries)):
+        dt_col = 1 + source_index * 2
+        sec_col = dt_col + 1
+        sheet.column_dimensions[get_column_letter(dt_col)].width = 22
+        sheet.column_dimensions[get_column_letter(sec_col)].width = 12
+
+    bucket_col = len(source_entries) * 2 + 1
+    sheet.column_dimensions[get_column_letter(bucket_col)].width = 10
+
+    if max_rows > 0:
+        sheet.auto_filter.ref = sheet.dimensions
+
+    return sheet
 
 
 def parse_start_date(value: str) -> date:
@@ -448,9 +524,9 @@ def main() -> int:
     workbook = Workbook()
     workbook.remove(workbook.active)
 
-    used_sheet_names: set[str] = set()
+    used_sheet_names: set[str] = {SUMMARY_SHEET_NAME}
     total_rows = 0
-    chart_title = f"{PLACEHOLDER_SPLIT.sub('value', config.line_pattern)} (seconds)"
+    source_entries: list[tuple[str, list[LogEntry]]] = []
 
     for log_path in config.log_files:
         resolved = log_path.resolve()
@@ -462,13 +538,22 @@ def main() -> int:
             config.min_seconds,
         )
         sheet_name = sanitize_sheet_name(resolved, used_sheet_names)
-        write_sheet(workbook, sheet_name, entries, chart_title)
+        write_sheet(workbook, sheet_name, entries)
+        source_label = resolved.stem
+        source_entries.append((source_label, entries))
         total_rows += len(entries)
         print(f"{resolved.name}: {len(entries)} matching line(s) -> sheet '{sheet_name}'")
 
-    if not workbook.sheetnames:
+    if not source_entries:
         print("No matching lines found in any log file.", file=sys.stderr)
         return 1
+
+    summary_row_count = max(len(entries) for _, entries in source_entries)
+    write_summary_sheet(workbook, source_entries)
+    print(
+        f"Summary: {summary_row_count} aligned row(s), "
+        f"{len(source_entries)} source(s) -> sheet '{SUMMARY_SHEET_NAME}'"
+    )
 
     workbook.save(config.output_file)
     min_filter = (
