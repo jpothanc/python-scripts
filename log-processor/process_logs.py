@@ -217,15 +217,15 @@ BUCKET_LABELS: tuple[str, ...] = (
 def duration_bucket(seconds: float) -> str:
     """Single mutually exclusive bucket label for Excel filtering."""
     if seconds > 300:
-        return ">5 min"
+        return ">5min"
     if seconds > 240:
-        return ">4 min"
+        return ">4min"
     if seconds > 180:
-        return ">3 min"
+        return ">3min"
     if seconds > 120:
-        return ">2 min"
+        return ">2min"
     if seconds > 60:
-        return ">1 min"
+        return ">1min"
     if seconds > 30:
         return ">30s"
     if seconds > 10:
@@ -288,7 +288,9 @@ def write_sheet(
 def count_buckets(entries: list[LogEntry]) -> dict[str, int]:
     counts = dict.fromkeys(BUCKET_LABELS, 0)
     for entry in entries:
-        counts[duration_bucket(entry.seconds)] += 1
+        label = duration_bucket(entry.seconds)
+        if label in counts:
+            counts[label] += 1
     return counts
 
 
