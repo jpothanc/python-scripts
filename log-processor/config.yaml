@@ -5,6 +5,11 @@ settings:
   # Output Excel workbook (relative paths are resolved from this config file's folder)
   output_file: log_analysis.xlsx
 
+  # Business hours window (inclusive). Used for the Business Hours Y/N column.
+  business_hours:
+    start: "09:00"
+    end: "16:00"
+
 # Log line pattern to match. Use x or X where the numeric duration appears in the log.
 # Example log line: "DB retrieval took 150 millis"
 line_pattern: "DB retrieval took x millis"
