@@ -1,5 +1,5 @@
-14:00:01 INFO DB retrieval took 300 millis
-18:22:10 INFO DB retrieval took 175 millis
-23:50:00 INFO DB retrieval took 90 millis
-11:05:12 INFO DB retrieval took 4000 millis
-06:00:00 INFO DB retrieval took 110 millis
+14:00:01 INFO W OPTION  DB retrieval took 300 millis
+18:22:10 INFO R PRICE  DB retrieval took 175 millis
+23:50:00 INFO M SUMMARY  DB retrieval took 90 millis
+11:05:12 INFO W OPTION  DB retrieval took 4000 millis
+06:00:00 INFO R PRICE  DB retrieval took 110 millis

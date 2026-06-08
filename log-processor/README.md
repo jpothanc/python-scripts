@@ -68,7 +68,9 @@ settings:
     start: "09:00"            # inclusive
     end: "16:00"              # inclusive (9 AM to 4 PM)
 
-line_pattern: "DB retrieval took x millis"
+line_pattern: "c DB retrieval took x millis"
+
+# Placeholders: c = cache name, x = duration value
 
 value_divisor: 1000           # 1000 = millis → seconds, 1 = already seconds
 
@@ -83,13 +85,12 @@ Paths in `log_files` and `output_file` are resolved relative to the config file�
 
 ### Line pattern
 
-Use `x` (or `X`) where the number appears in the log:
+Use `x` (or `X`) where the number appears, and `c` where the cache name appears before the message:
 
-| Log text                         | `line_pattern`                      |
-|----------------------------------|-------------------------------------|
-| `DB retrieval took 150 millis`   | `DB retrieval took x millis`        |
-| `Cache lookup duration: 42ms`    | `Cache lookup duration: xms`        |
-| `Query completed in 3.5 sec`     | `Query completed in x sec` + `value_divisor: 1` |
+| Log text | `line_pattern` |
+|----------|----------------|
+| `W OPTION  DB retrieval took 150 millis` | `c DB retrieval took x millis` |
+| `DB retrieval took 150 millis` (no cache name) | `DB retrieval took x millis` |
 
 ### Minimum duration filter
 
@@ -179,8 +180,8 @@ py process_logs.py -c C:\configs\prod.yaml -d 2026-06-01
 
 - Single `.xlsx` file (default: `log_analysis.xlsx`).
 - **Summary** sheet (first tab): info block, then three sections — **Performance summary** (totals, BH Y/N, stats), **Bucket counts — business hours**, and **Bucket counts — outside business hours** (each with bucket columns and an **ALL SOURCES** row when multiple logs are processed).
-- **All** sheet: **Source**, **DateTime**, **Seconds**, **Bucket**, **Business Hours** (`Y`/`N`).
-- One worksheet per input log file: **DateTime**, **Seconds**, **Bucket**, **Business Hours** (`Y`/`N`).
+- **All** sheet: **Source**, **DateTime**, **Cache Name**, **Seconds**, **Bucket**, **Business Hours** (`Y`/`N`).
+- One worksheet per input log file: **DateTime**, **Cache Name**, **Seconds**, **Bucket**, **Business Hours** (`Y`/`N`).
 
 ## Project layout
 

@@ -10,9 +10,11 @@ settings:
     start: "09:00"
     end: "16:00"
 
-# Log line pattern to match. Use x or X where the numeric duration appears in the log.
-# Example log line: "DB retrieval took 150 millis"
-line_pattern: "DB retrieval took x millis"
+# Log line pattern to match. Use:
+#   c = cache name (text before the DB message, e.g. "W OPTION")
+#   x = numeric duration (milliseconds in the log)
+# Example log line: "W OPTION  DB retrieval took 150 millis"
+line_pattern: "c DB retrieval took x millis"
 
 # Divide the captured number by this to produce seconds (1000 = millis, 1 = already seconds)
 value_divisor: 1000

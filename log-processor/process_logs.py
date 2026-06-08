@@ -28,12 +28,13 @@ TIME_PATTERN = re.compile(
 )
 
 
-PLACEHOLDER_SPLIT = re.compile(r"(?i)x")
+PATTERN_TOKEN_SPLIT = re.compile(r"(?i)(x|c)")
 
 
 @dataclass(frozen=True)
 class LogEntry:
     entry_datetime: datetime
+    cache_name: str
     seconds: float
 
 
@@ -86,13 +87,55 @@ class SummaryContext:
     generated_at: datetime
 
 
+def has_cache_name_placeholder(pattern: str) -> bool:
+    return bool(re.search(r"(?i)c", pattern))
+
+
+def cache_prefix_literal(pattern: str) -> str | None:
+    if not has_cache_name_placeholder(pattern):
+        return None
+    match = re.search(r"(?i)c(.+?)x", pattern, re.DOTALL)
+    if not match:
+        return None
+    return match.group(1)
+
+
+def extract_cache_name(line: str, prefix_literal: str) -> str:
+    index = line.lower().find(prefix_literal.lower())
+    if index == -1:
+        return ""
+    prefix = line[:index].strip()
+    prefix = re.sub(r"^\d{1,2}:\d{2}:\d{2}(?:[.,]\d+)?\s+", "", prefix)
+    prefix = re.sub(
+        r"^(?:INFO|DEBUG|WARN|WARNING|ERROR|TRACE)\s+",
+        "",
+        prefix,
+        flags=re.IGNORECASE,
+    )
+    return prefix.strip()
+
+
 def pattern_to_regex(pattern: str) -> re.Pattern[str]:
-    if not PLACEHOLDER_SPLIT.search(pattern):
+    if not re.search(r"(?i)x", pattern):
         raise ValueError("line_pattern must contain 'x' as the numeric placeholder.")
 
-    parts = PLACEHOLDER_SPLIT.split(pattern)
-    regex_body = r"(\d+(?:\.\d+)?)".join(re.escape(part) for part in parts)
-    return re.compile(regex_body, re.IGNORECASE)
+    duration_pattern = re.sub(r"(?i)c\s*", "", pattern, count=1)
+    tokens = PATTERN_TOKEN_SPLIT.split(duration_pattern)
+    if len(tokens) < 3:
+        raise ValueError("Invalid line_pattern.")
+
+    regex_parts: list[str] = []
+    for index, token in enumerate(tokens):
+        if index % 2 == 0:
+            regex_parts.append(re.escape(token))
+        elif token.lower() == "x":
+            regex_parts.append(r"(?P<duration>\d+(?:\.\d+)?)")
+
+    return re.compile("".join(regex_parts), re.IGNORECASE)
+
+
+def extract_pattern_fields(match: re.Match[str]) -> float:
+    return float(match.group("duration"))
 
 
 def parse_time_from_line(line: str) -> time | None:
@@ -113,7 +156,9 @@ def parse_time_from_line(line: str) -> time | None:
     )
 
 
-def assign_dates(entries: list[tuple[time, float]], start_date: date) -> list[LogEntry]:
+def assign_dates(
+    entries: list[tuple[time, float, str]], start_date: date
+) -> list[LogEntry]:
     if not entries:
         return []
 
@@ -121,13 +166,14 @@ def assign_dates(entries: list[tuple[time, float]], start_date: date) -> list[Lo
     previous_time: time | None = None
     results: list[LogEntry] = []
 
-    for entry_time, seconds in entries:
+    for entry_time, seconds, cache_name in entries:
         if previous_time is not None and entry_time < previous_time:
             current_date += timedelta(days=1)
 
         results.append(
             LogEntry(
                 entry_datetime=datetime.combine(current_date, entry_time),
+                cache_name=cache_name,
                 seconds=seconds,
             )
         )
@@ -139,11 +185,13 @@ def assign_dates(entries: list[tuple[time, float]], start_date: date) -> list[Lo
 def process_log_file(
     log_path: Path,
     line_pattern: re.Pattern[str],
+    line_pattern_text: str,
     start_date: date,
     value_divisor: float,
     min_seconds: float,
 ) -> list[LogEntry]:
-    raw_entries: list[tuple[time, float]] = []
+    raw_entries: list[tuple[time, float, str]] = []
+    cache_prefix = cache_prefix_literal(line_pattern_text)
 
     with log_path.open(encoding="utf-8", errors="replace") as log_file:
         for line in log_file:
@@ -155,8 +203,13 @@ def process_log_file(
             if entry_time is None:
                 continue
 
-            raw_value = float(pattern_match.group(1))
-            raw_entries.append((entry_time, raw_value / value_divisor))
+            raw_value = extract_pattern_fields(pattern_match)
+            cache_name = (
+                extract_cache_name(line, cache_prefix)
+                if cache_prefix
+                else ""
+            )
+            raw_entries.append((entry_time, raw_value / value_divisor, cache_name))
 
     entries = assign_dates(raw_entries, start_date)
     if min_seconds <= 0:
@@ -285,6 +338,7 @@ def format_business_hours_window(business_hours: BusinessHours) -> str:
 def entry_row_values(entry: LogEntry, business_hours: BusinessHours) -> list:
     return [
         entry.entry_datetime,
+        entry.cache_name,
         round(entry.seconds, 3),
         duration_bucket(entry.seconds),
         business_hours_flag(entry, business_hours),
@@ -334,8 +388,8 @@ def summary_table_min_widths(headers: list[str]) -> dict[int, float]:
             widths[col] = 30
         elif header in ("BH Y", "BH N"):
             widths[col] = 8
-        elif header == "Business Hours":
-            widths[col] = 14
+        elif header == "Cache Name":
+            widths[col] = 18
         elif header in ("First seen", "Last seen"):
             widths[col] = 20
         elif header == "Total":
@@ -392,7 +446,7 @@ def write_sheet(
     business_hours: BusinessHours,
 ) -> Worksheet:
     sheet = workbook.create_sheet(title=sheet_name)
-    sheet.append(["DateTime", "Seconds", "Bucket", "Business Hours"])
+    sheet.append(["DateTime", "Cache Name", "Seconds", "Bucket", "Business Hours"])
 
     for entry in entries:
         sheet.append(entry_row_values(entry, business_hours))
@@ -400,12 +454,12 @@ def write_sheet(
     apply_sheet_layout(
         sheet,
         datetime_column=1,
-        bucket_column=3,
-        business_hours_column=4,
+        bucket_column=4,
+        business_hours_column=5,
     )
     fit_column_widths(
         sheet,
-        min_widths={1: 20, 2: 10, 3: 9, 4: 14},
+        min_widths={1: 20, 2: 14, 3: 10, 4: 9, 5: 14},
     )
     return sheet
 
@@ -617,7 +671,7 @@ def write_all_sheet(
     business_hours: BusinessHours,
 ) -> Worksheet:
     sheet = workbook.create_sheet(title=ALL_SHEET_NAME, index=0)
-    sheet.append(["Source", "DateTime", "Seconds", "Bucket", "Business Hours"])
+    sheet.append(["Source", "DateTime", "Cache Name", "Seconds", "Bucket", "Business Hours"])
 
     for source, entry in sorted(rows, key=lambda item: (item[1].entry_datetime, item[0])):
         sheet.append([source, *entry_row_values(entry, business_hours)])
@@ -625,15 +679,15 @@ def write_all_sheet(
     apply_sheet_layout(
         sheet,
         datetime_column=2,
-        bucket_column=4,
-        business_hours_column=5,
+        bucket_column=5,
+        business_hours_column=6,
         datetime_width=20,
         seconds_width=10,
         bucket_width=9,
     )
     fit_column_widths(
         sheet,
-        min_widths={1: 14, 2: 20, 3: 10, 4: 9, 5: 14},
+        min_widths={1: 14, 2: 20, 3: 14, 4: 10, 5: 9, 6: 14},
     )
 
     return sheet
@@ -1147,6 +1201,7 @@ def main() -> int:
         entries = process_log_file(
             resolved,
             line_pattern,
+            config.line_pattern,
             config.start_date,
             config.value_divisor,
             config.min_seconds,
