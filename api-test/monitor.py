@@ -35,6 +35,7 @@ class ApiTarget:
     url: str
     method: str = "GET"
     headers: dict[str, str] | None = None
+    params: dict[str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -43,6 +44,7 @@ class MonitorSettings:
     interval_seconds: float
     timeout_seconds: float
     output_file: Path
+    default_headers: dict[str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -58,11 +60,32 @@ class CheckResult:
 
 
 class ApiMonitor:
+    DEFAULT_USER_AGENT = "api-test-monitor/1.0"
+
     def __init__(self, settings: MonitorSettings, apis: list[ApiTarget]) -> None:
         self.settings = settings
         self.apis = apis
         self._stop_requested = False
         self._session = requests.Session()
+
+    @staticmethod
+    def _response_error_snippet(response: requests.Response, *, limit: int = 200) -> str:
+        text = response.text.strip().replace("\r", " ").replace("\n", " ")
+        if len(text) > limit:
+            return f"HTTP {response.status_code}: {text[:limit]}..."
+        return f"HTTP {response.status_code}: {text}" if text else f"HTTP {response.status_code}"
+
+    @staticmethod
+    def _build_headers(
+        api_headers: dict[str, str] | None,
+        default_headers: dict[str, str] | None,
+    ) -> dict[str, str]:
+        headers = {"User-Agent": ApiMonitor.DEFAULT_USER_AGENT}
+        if default_headers:
+            headers.update(default_headers)
+        if api_headers:
+            headers.update(api_headers)
+        return headers
 
     def request_stop(self) -> None:
         self._stop_requested = True
@@ -117,19 +140,32 @@ class ApiMonitor:
             response = self._session.request(
                 method=api.method.upper(),
                 url=api.url,
-                headers=api.headers,
+                headers=self._build_headers(api.headers, self.settings.default_headers),
+                params=api.params,
                 timeout=self.settings.timeout_seconds,
             )
             elapsed_ms = (time.perf_counter() - started) * 1000
+            status_code = response.status_code
+            if 200 <= status_code < 300:
+                return CheckResult(
+                    timestamp_utc=timestamp,
+                    api_name=api.name,
+                    url=api.url,
+                    method=api.method.upper(),
+                    http_status=str(status_code),
+                    response_time_ms=f"{elapsed_ms:.2f}",
+                    result="success",
+                    error_message="",
+                )
             return CheckResult(
                 timestamp_utc=timestamp,
                 api_name=api.name,
                 url=api.url,
                 method=api.method.upper(),
-                http_status=str(response.status_code),
+                http_status=str(status_code),
                 response_time_ms=f"{elapsed_ms:.2f}",
-                result="success",
-                error_message="",
+                result="http_error",
+                error_message=self._response_error_snippet(response),
             )
         except Timeout:
             elapsed_ms = (time.perf_counter() - started) * 1000
@@ -165,6 +201,7 @@ class ApiMonitor:
         else:
             print(
                 f"  [{result.api_name}] {result.result.upper()} "
+                f"status={result.http_status or 'n/a'} "
                 f"after {result.response_time_ms}ms - {result.error_message}"
             )
 
@@ -173,24 +210,32 @@ class ApiMonitor:
             print("No results file found.")
             return
 
-        counts: dict[str, int] = {"success": 0, "timeout": 0, "error": 0}
+        counts: dict[str, int] = {"success": 0, "http_error": 0, "timeout": 0, "error": 0}
         per_api: dict[str, dict[str, int]] = {}
 
         with self.settings.output_file.open(newline="", encoding="utf-8") as csv_file:
             reader = csv.DictReader(csv_file)
             for row in reader:
                 result = row["result"]
+                if result == "success" and row.get("http_status", "").startswith(("4", "5")):
+                    result = "http_error"
                 counts[result] = counts.get(result, 0) + 1
 
                 api_name = row["api_name"]
                 if api_name not in per_api:
-                    per_api[api_name] = {"success": 0, "timeout": 0, "error": 0}
+                    per_api[api_name] = {
+                        "success": 0,
+                        "http_error": 0,
+                        "timeout": 0,
+                        "error": 0,
+                    }
                 per_api[api_name][result] = per_api[api_name].get(result, 0) + 1
 
         total = sum(counts.values())
         print("\n=== Summary ===")
         print(f"Total checks: {total}")
         print(f"Successful:   {counts.get('success', 0)}")
+        print(f"HTTP errors:  {counts.get('http_error', 0)}")
         print(f"Timeouts:     {counts.get('timeout', 0)}")
         print(f"Errors:       {counts.get('error', 0)}")
 
@@ -201,9 +246,41 @@ class ApiMonitor:
                 print(
                     f"  {api_name}: "
                     f"success={stats.get('success', 0)}, "
+                    f"http_error={stats.get('http_error', 0)}, "
                     f"timeout={stats.get('timeout', 0)}, "
                     f"error={stats.get('error', 0)}"
                 )
+
+
+def resolve_accept_header(accept_value: str) -> str:
+    presets = {
+        "xml": "application/xml, text/xml;q=0.9, */*;q=0.8",
+        "json": "application/json",
+        "text": "text/plain, */*;q=0.8",
+    }
+    return presets.get(accept_value.strip().lower(), accept_value)
+
+
+def build_api_headers(api_raw: dict) -> dict[str, str] | None:
+    headers: dict[str, str] = {}
+    raw_headers = api_raw.get("headers")
+    if isinstance(raw_headers, dict):
+        headers.update({str(key): str(value) for key, value in raw_headers.items()})
+
+    accept = api_raw.get("accept")
+    if accept:
+        headers.setdefault("Accept", resolve_accept_header(str(accept)))
+
+    return headers or None
+
+
+def build_api_params(api_raw: dict) -> dict[str, str] | None:
+    params = api_raw.get("params")
+    if params is None:
+        return None
+    if not isinstance(params, dict):
+        raise ValueError(f"API '{api_raw.get('name')}' params must be a mapping.")
+    return {str(key): str(value) for key, value in params.items()}
 
 
 def load_config(config_path: Path) -> tuple[MonitorSettings, list[ApiTarget]]:
@@ -225,11 +302,16 @@ def load_config(config_path: Path) -> tuple[MonitorSettings, list[ApiTarget]]:
     if not output_file.is_absolute():
         output_file = config_path.parent / output_file
 
+    default_headers = settings_raw.get("default_headers")
+    if default_headers is not None and not isinstance(default_headers, dict):
+        raise ValueError("'settings.default_headers' must be a mapping.")
+
     settings = MonitorSettings(
         duration_hours=float(settings_raw.get("duration_hours", 24)),
         interval_seconds=float(settings_raw.get("interval_seconds", 60)),
         timeout_seconds=float(settings_raw.get("timeout_seconds", 10)),
         output_file=output_file,
+        default_headers=default_headers,
     )
 
     apis: list[ApiTarget] = []
@@ -242,9 +324,8 @@ def load_config(config_path: Path) -> tuple[MonitorSettings, list[ApiTarget]]:
         if not name or not url:
             raise ValueError(f"API entry #{index} requires 'name' and 'url'.")
 
-        headers = api_raw.get("headers")
-        if headers is not None and not isinstance(headers, dict):
-            raise ValueError(f"API '{name}' headers must be a mapping.")
+        headers = build_api_headers(api_raw)
+        params = build_api_params(api_raw)
 
         apis.append(
             ApiTarget(
@@ -252,6 +333,7 @@ def load_config(config_path: Path) -> tuple[MonitorSettings, list[ApiTarget]]:
                 url=str(url),
                 method=str(api_raw.get("method", "GET")),
                 headers=headers,
+                params=params,
             )
         )
 

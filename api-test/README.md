@@ -69,9 +69,21 @@ apis:
   - name: my_api
     url: https://api.example.com/health
     method: GET
-    headers:
-      Authorization: Bearer your-token
+
+  # XML GET — no Authorization; use accept: xml so the server returns XML (not 400)
+  - name: my_xml_api
+    url: https://your-server/api/endpoint
+    method: GET
+    accept: xml
 ```
+
+The `accept` field sets the `Accept` header. Presets: `xml`, `json`, `text`, or a custom value.
+
+### HTTP status handling
+
+- **2xx** → logged as `success`
+- **4xx / 5xx** → logged as `http_error` (includes response snippet in `error_message`)
+- **Timeout** → logged as `timeout`
 
 Paths in `output_file` are relative to the config file’s folder unless absolute.
 
@@ -105,7 +117,7 @@ Default file: `results.csv`
 | `method` | HTTP method |
 | `http_status` | Status code (empty on timeout/error) |
 | `response_time_ms` | Elapsed time in milliseconds |
-| `result` | `success`, `timeout`, or `error` |
+| `result` | `success`, `http_error`, `timeout`, or `error` |
 | `error_message` | Details when not successful |
 
 Example rows:

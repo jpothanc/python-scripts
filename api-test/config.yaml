@@ -11,7 +11,17 @@ settings:
   # CSV output file (written in the api-test folder unless an absolute path is given)
   output_file: results.csv
 
+  # Optional headers applied to every API call (uncomment for XML APIs)
+  # default_headers:
+  #   Accept: application/xml, text/xml;q=0.9, */*;q=0.8
+
 apis:
+  # XML GET example — no auth; only accept: xml is usually required
+  # - name: my_xml_api
+  #   url: https://your-server/api/endpoint
+  #   method: GET
+  #   accept: xml
+
   - name: httpbin_get
     url: https://httpbin.org/get
     method: GET
