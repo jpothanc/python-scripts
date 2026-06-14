@@ -112,7 +112,8 @@ def extract_cache_name(line: str, prefix_literal: str) -> str:
         prefix,
         flags=re.IGNORECASE,
     )
-    return prefix.strip()
+    words = prefix.split()
+    return words[-1] if words else ""
 
 
 def pattern_to_regex(pattern: str) -> re.Pattern[str]:

@@ -1,0 +1,9 @@
+timestamp_utc,api_name,url,method,http_status,response_time_ms,result,error_message
+2026-06-09T09:00:01+00:00,httpbin_get,https://httpbin.org/get,GET,200,85.20,success,
+2026-06-09T09:00:02+00:00,httpbin_status_200,https://httpbin.org/status/200,GET,200,12.50,success,
+2026-06-09T09:01:01+00:00,httpbin_get,https://httpbin.org/get,GET,200,450.00,success,
+2026-06-09T09:01:02+00:00,httpbin_delay_2s,https://httpbin.org/delay/2,GET,200,2100.00,success,
+2026-06-09T09:02:01+00:00,httpbin_delay_15s,https://httpbin.org/delay/15,GET,,10000.00,timeout,Request exceeded 10s timeout
+2026-06-09T09:02:02+00:00,httpbin_get,https://httpbin.org/get,GET,200,8.30,success,
+2026-06-09T09:03:01+00:00,httpbin_status_200,https://httpbin.org/status/200,GET,200,18.75,success,
+2026-06-09T09:03:02+00:00,httpbin_get,https://httpbin.org/get,GET,500,120.00,success,

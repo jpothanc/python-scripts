@@ -1,0 +1,5 @@
+# Input log file (CSV from api-test/monitor.py or compatible format)
+input_file: sample_logs/api_calls.csv
+
+# Excel report output
+output_file: api_report.xlsx

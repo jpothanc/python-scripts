@@ -85,11 +85,11 @@ Paths in `log_files` and `output_file` are resolved relative to the config fileâ
 
 ### Line pattern
 
-Use `x` (or `X`) where the number appears, and `c` where the cache name appears before the message:
+Use `x` for the duration and `c` for the single cache name word immediately before `DB retrieval took`:
 
 | Log text | `line_pattern` |
 |----------|----------------|
-| `W OPTION  DB retrieval took 150 millis` | `c DB retrieval took x millis` |
+| `OPTION  DB retrieval took 150 millis` | `c DB retrieval took x millis` |
 | `DB retrieval took 150 millis` (no cache name) | `DB retrieval took x millis` |
 
 ### Minimum duration filter
